@@ -88,6 +88,12 @@ type TrackerState = {
   rounds: CrochetRound[];
   activeId: string | null;
 };
+type SavedNotebook = {
+  id: string;
+  name: string;
+  notes: string;
+  state: TrackerState;
+};
 
 type ScreenWakeLock = { release: () => Promise<void> };
 type WakeLockNavigator = Navigator & {
@@ -137,6 +143,7 @@ const markerOptions: { id: MarkerId; label: string; short: string }[] = [
 ];
 
 const storageKey = 'crochet-counter-notebook-v1';
+const maxSavedNotebooks = 5;
 const newId = () => `round-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 function markerFor(id: MarkerId) {
@@ -296,6 +303,8 @@ function Modal({
 
 function Home() {
   const [state, setState] = useState<TrackerState>(emptyState);
+  const [notebooks, setNotebooks] = useState<SavedNotebook[]>([]);
+  const [activeNotebookId, setActiveNotebookId] = useState(() => `notebook-${Date.now()}`);
   const [selectedMarker, setSelectedMarker] = useState<MarkerId>('sc');
   const [projectName, setProjectName] = useState('My crochet project');
   const [patternNotes, setPatternNotes] = useState('');
@@ -308,9 +317,12 @@ function Home() {
   const [completionRoundId, setCompletionRoundId] = useState<string | null>(null);
   const [showFreshNotebookDialog, setShowFreshNotebookDialog] = useState(false);
   const [showUsageGuide, setShowUsageGuide] = useState(false);
+  const [showNotebookLibrary, setShowNotebookLibrary] = useState(false);
+  const [notebookToRemove, setNotebookToRemove] = useState<SavedNotebook | null>(null);
   const [roundAction, setRoundAction] = useState<'reset' | 'delete' | null>(null);
   const [keepScreenAwake, setKeepScreenAwake] = useState(false);
   const wakeLockRef = useRef<ScreenWakeLock | null>(null);
+  const notebooksRef = useRef<SavedNotebook[]>([]);
 
   useEffect(() => () => {
     void wakeLockRef.current?.release();
@@ -320,17 +332,29 @@ function Home() {
     try {
       const saved = window.localStorage.getItem(storageKey);
       if (saved) {
-        const parsed = JSON.parse(saved) as { state?: TrackerState; projectName?: string; patternNotes?: string };
-        if (parsed.state?.rounds && !isLegacyDemoNotebook(parsed.state, parsed.projectName)) {
-          const rounds = parsed.state.rounds.map((round) => normalizeRound({
+        const parsed = JSON.parse(saved) as { state?: TrackerState; projectName?: string; patternNotes?: string; notebooks?: SavedNotebook[]; activeNotebookId?: string };
+        const normalizeState = (savedState: TrackerState) => ({ ...savedState, rounds: savedState.rounds.map((round) => normalizeRound({
             ...round,
             patternSteps: round.patternSteps ?? [],
             patternRepeats: round.patternRepeats ?? 1,
             progress: round.progress ?? 0,
-          }));
-          setState({ ...parsed.state, rounds });
+          })) });
+        if (parsed.notebooks?.length) {
+          const restored = parsed.notebooks.slice(0, maxSavedNotebooks).map((notebook) => ({ ...notebook, state: normalizeState(notebook.state) }));
+          const active = restored.find((notebook) => notebook.id === parsed.activeNotebookId) ?? restored[0];
+          notebooksRef.current = restored;
+          setNotebooks(restored);
+          setActiveNotebookId(active.id);
+          setState(active.state);
+          setProjectName(active.name);
+          setPatternNotes(active.notes);
+        } else if (parsed.state?.rounds && !isLegacyDemoNotebook(parsed.state, parsed.projectName)) {
+          const restoredState = normalizeState(parsed.state);
+          setState(restoredState);
+          if (typeof parsed.projectName === 'string') setProjectName(parsed.projectName);
+          if (typeof parsed.patternNotes === 'string') setPatternNotes(parsed.patternNotes);
         }
-        if (!isLegacyDemoNotebook(parsed.state ?? { rounds: [], activeId: null }, parsed.projectName)) {
+        if (!parsed.notebooks?.length && !isLegacyDemoNotebook(parsed.state ?? { rounds: [], activeId: null }, parsed.projectName)) {
           if (typeof parsed.projectName === 'string') setProjectName(parsed.projectName);
           if (typeof parsed.patternNotes === 'string') setPatternNotes(parsed.patternNotes);
         }
@@ -343,8 +367,15 @@ function Home() {
 
   useEffect(() => {
     if (!hydrated) return;
-    window.localStorage.setItem(storageKey, JSON.stringify({ state, projectName, patternNotes }));
-  }, [hydrated, state, projectName, patternNotes]);
+    const activeNotebook: SavedNotebook = { id: activeNotebookId, name: projectName, notes: patternNotes, state };
+    const previous = notebooksRef.current;
+    const next = previous.some((notebook) => notebook.id === activeNotebookId)
+      ? previous.map((notebook) => notebook.id === activeNotebookId ? activeNotebook : notebook)
+      : [...previous, activeNotebook].slice(-maxSavedNotebooks);
+    notebooksRef.current = next;
+    setNotebooks(next);
+    window.localStorage.setItem(storageKey, JSON.stringify({ notebooks: next, activeNotebookId }));
+  }, [activeNotebookId, hydrated, patternNotes, projectName, state]);
 
   const activeRound = useMemo(
     () => state.rounds.find((round) => round.id === state.activeId) ?? state.rounds[0] ?? null,
@@ -485,6 +516,48 @@ function Home() {
     setModal(null);
   };
 
+  const selectNotebook = (notebook: SavedNotebook) => {
+    setActiveNotebookId(notebook.id);
+    setState(notebook.state);
+    setProjectName(notebook.name);
+    setPatternNotes(notebook.notes);
+    setPast([]);
+    setFuture([]);
+    setShowNotebookLibrary(false);
+  };
+
+  const createNotebook = () => {
+    if (notebooksRef.current.length >= maxSavedNotebooks) return;
+    const id = `notebook-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const notebook: SavedNotebook = { id, name: 'My crochet project', notes: '', state: emptyState() };
+    notebooksRef.current = [...notebooksRef.current, notebook];
+    setNotebooks(notebooksRef.current);
+    setActiveNotebookId(id);
+    setState(notebook.state);
+    setProjectName(notebook.name);
+    setPatternNotes(notebook.notes);
+    setPast([]);
+    setFuture([]);
+    setShowNotebookLibrary(false);
+  };
+
+  const removeNotebook = () => {
+    if (!notebookToRemove || notebooksRef.current.length <= 1) return;
+    const remaining = notebooksRef.current.filter((notebook) => notebook.id !== notebookToRemove.id);
+    notebooksRef.current = remaining;
+    setNotebooks(remaining);
+    if (notebookToRemove.id === activeNotebookId) {
+      const next = remaining[0];
+      setActiveNotebookId(next.id);
+      setState(next.state);
+      setProjectName(next.name);
+      setPatternNotes(next.notes);
+      setPast([]);
+      setFuture([]);
+    }
+    setNotebookToRemove(null);
+  };
+
   const saveRound = (name: string, target: number, instruction: string, patternSteps: PatternStep[], patternRepeats: number) => {
     const cleanName = name.trim() || `Round ${state.rounds.length + 1}`;
     const cleanSteps = patternSteps
@@ -597,6 +670,7 @@ function Home() {
               <h1 className="mt-1 font-display text-[32px] leading-tight">Made one loop at a time.</h1>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              <AppButton onClick={() => setShowNotebookLibrary(true)} data-testid="button-project-library" aria-label="Open saved projects" className="h-11 w-11 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] hover:border-[hsl(var(--primary))] hover:text-[hsl(var(--primary))]"><NotebookPen size={18} /></AppButton>
               <AppButton onClick={() => setShowUsageGuide(true)} data-testid="button-usage-guide" aria-label="How to use Crochet Counter" className="h-11 w-11 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] hover:border-[hsl(var(--primary))] hover:text-[hsl(var(--primary))]"><Info size={18} /></AppButton>
               {typeof navigator !== 'undefined' && Boolean((navigator as WakeLockNavigator).wakeLock) && <AppButton onClick={toggleKeepScreenAwake} data-testid="button-keep-screen-awake" aria-pressed={keepScreenAwake} aria-label={keepScreenAwake ? 'Allow screen to sleep' : 'Keep screen awake'} className={`hidden h-11 rounded-full border px-3 text-xs font-bold sm:inline-flex ${keepScreenAwake ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary)/.1)] text-[hsl(var(--primary))]' : 'border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))]'}`}><Sun size={17} /> Awake</AppButton>}
               <AppButton onClick={undo} disabled={!past.length} data-testid="button-undo" aria-label="Undo last action" className="h-11 w-11 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] enabled:hover:border-[hsl(var(--primary))] enabled:hover:text-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-35"><Undo2 size={18} /></AppButton>
@@ -784,6 +858,8 @@ function Home() {
       {completionRoundId && <RoundCompleteModal rounds={state.rounds} completedRoundId={completionRoundId} onClose={() => setCompletionRoundId(null)} onStartNext={startNextRound} />}
       {showFreshNotebookDialog && <FreshNotebookModal onClose={() => setShowFreshNotebookDialog(false)} onConfirm={startFresh} />}
       {showUsageGuide && <UsageGuideModal onClose={() => setShowUsageGuide(false)} />}
+      {showNotebookLibrary && <NotebookLibraryModal notebooks={notebooks} activeNotebookId={activeNotebookId} onClose={() => setShowNotebookLibrary(false)} onSelect={selectNotebook} onCreate={createNotebook} onRemove={setNotebookToRemove} />}
+      {notebookToRemove && <RemoveNotebookModal notebookName={notebookToRemove.name} onClose={() => setNotebookToRemove(null)} onConfirm={removeNotebook} />}
       {roundAction && activeRound && <RoundActionModal action={roundAction} roundName={activeRound.name} onClose={() => setRoundAction(null)} onConfirm={roundAction === 'reset' ? resetRound : removeRound} />}
     </div>
   );
@@ -837,6 +913,45 @@ function UsageGuideModal({ onClose }: { onClose: () => void }) {
         <li><strong className="text-[hsl(var(--foreground))]">5. Continue round by round.</strong> When a round is complete, confirm whether you are ready to start the next one. Your progress saves automatically in this browser.</li>
       </ol>
       <AppButton onClick={onClose} data-testid="button-close-usage-guide" className="mt-6 h-12 w-full bg-[hsl(var(--primary))] px-4 font-bold text-[hsl(var(--primary-foreground))] shadow-[0_4px_0_hsl(var(--accent))]">Got it</AppButton>
+    </Modal>
+  );
+}
+
+function NotebookLibraryModal({ notebooks, activeNotebookId, onClose, onSelect, onCreate, onRemove }: {
+  notebooks: SavedNotebook[];
+  activeNotebookId: string;
+  onClose: () => void;
+  onSelect: (notebook: SavedNotebook) => void;
+  onCreate: () => void;
+  onRemove: (notebook: SavedNotebook) => void;
+}) {
+  return (
+    <Modal title="Your projects" eyebrow={`${notebooks.length} of ${maxSavedNotebooks} saved on this device`} onClose={onClose}>
+      <div className="max-h-[52vh] space-y-2 overflow-y-auto pr-1">
+        {notebooks.map((notebook) => (
+          <div key={notebook.id} className={`flex items-center gap-2 rounded-xl border p-3 ${notebook.id === activeNotebookId ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary)/.07)]' : 'border-[hsl(var(--border))]'}`}>
+            <button type="button" onClick={() => onSelect(notebook)} className="min-w-0 flex-1 text-left">
+              <span className="block truncate text-sm font-bold text-[hsl(var(--foreground))]">{notebook.name}</span>
+              <span className="mt-1 block text-xs text-[hsl(var(--muted-foreground))]">{notebook.state.rounds.length} {notebook.state.rounds.length === 1 ? 'round' : 'rounds'} · saved in this browser</span>
+            </button>
+            {notebooks.length > 1 && <AppButton onClick={() => onRemove(notebook)} aria-label={`Remove ${notebook.name}`} className="h-9 w-9 shrink-0 rounded-full text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--destructive)/.12)] hover:text-[hsl(var(--destructive))]"><Trash2 size={16} /></AppButton>}
+          </div>
+        ))}
+      </div>
+      <AppButton onClick={onCreate} disabled={notebooks.length >= maxSavedNotebooks} data-testid="button-create-project" className="mt-5 h-12 w-full border border-[hsl(var(--primary))] px-4 font-bold text-[hsl(var(--primary))] enabled:hover:bg-[hsl(var(--primary)/.08)] disabled:cursor-not-allowed disabled:opacity-45"><Plus size={18} /> {notebooks.length >= maxSavedNotebooks ? 'Five projects saved' : 'Create a new project'}</AppButton>
+      <p className="mt-3 text-center text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">Projects and progress stay only on this device. Remove one to free a space.</p>
+    </Modal>
+  );
+}
+
+function RemoveNotebookModal({ notebookName, onClose, onConfirm }: { notebookName: string; onClose: () => void; onConfirm: () => void }) {
+  return (
+    <Modal title={`Remove ${notebookName}?`} eyebrow="Remove saved project" onClose={onClose}>
+      <p className="text-sm leading-relaxed text-[hsl(var(--muted-foreground))]">This project, its rounds, and saved progress will be removed from this browser.</p>
+      <div className="mt-6 grid gap-3 sm:grid-cols-2">
+        <AppButton onClick={onClose} className="h-12 border border-[hsl(var(--border))] px-4 font-bold text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]">Cancel</AppButton>
+        <AppButton onClick={onConfirm} className="h-12 bg-[hsl(var(--destructive))] px-4 font-bold text-[hsl(var(--destructive-foreground))]">Remove project</AppButton>
+      </div>
     </Modal>
   );
 }
