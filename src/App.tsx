@@ -82,6 +82,7 @@ type CrochetRound = {
   patternSteps: PatternStep[];
   patternRepeats: number;
   progress: number;
+  started?: boolean;
 };
 type TrackerState = {
   rounds: CrochetRound[];
@@ -152,6 +153,7 @@ function normalizeRound(round: CrochetRound): CrochetRound {
   return {
     ...round,
     counts,
+    started: round.started ?? Object.values(counts).some((count) => (count ?? 0) > 0),
     patternSteps: (round.patternSteps ?? []).map((step) => ({
       ...step,
       markerId: legacyMarkerIds[step.markerId] ?? step.markerId,
@@ -235,6 +237,7 @@ function emptyState(): TrackerState {
     patternSteps: [],
     patternRepeats: 1,
     progress: 0,
+    started: false,
   };
   return {
     activeId: firstRound.id,
@@ -351,6 +354,7 @@ function Home() {
   const activeTotal = activeRound ? totalFor(activeRound) : 0;
   const activePercent = activeRound ? percentFor(activeRound) : 0;
   const isRoundComplete = activeRound ? activeCount >= activeTotal : false;
+  const isRoundStarted = Boolean(activeRound?.started || activeCount > 0);
   const nextStepPosition = activeRound ? currentPatternStepPosition(activeRound) : null;
   const nextStep = nextStepPosition?.step ?? null;
   const nextMarker = markerFor(nextStep?.markerId ?? selectedMarker);
@@ -388,6 +392,19 @@ function Home() {
     if (amount > 0 && activeCount + 1 >= activeTotal) setCompletionRoundId(activeRound.id);
   };
 
+  const startRound = () => {
+    if (!activeRound || isRoundStarted) return;
+    updateRound(activeRound.id, (round) => ({ ...round, started: true }));
+  };
+
+  const advanceRound = () => {
+    if (!isRoundStarted) {
+      startRound();
+      return;
+    }
+    changeCount(1);
+  };
+
   const selectRound = (id: string) => {
     if (id !== state.activeId) commit({ ...state, activeId: id });
   };
@@ -410,7 +427,7 @@ function Home() {
 
   const resetRound = () => {
     if (!activeRound) return;
-    updateRound(activeRound.id, (round) => ({ ...round, counts: {}, progress: 0 }));
+    updateRound(activeRound.id, (round) => ({ ...round, counts: {}, progress: 0, started: false }));
     setRoundAction(null);
   };
 
@@ -490,7 +507,7 @@ function Home() {
         progress: cleanSteps.length ? Math.min(round.progress, cleanTarget) : round.progress,
       }));
     } else {
-      const round = { id: newId(), name: cleanName, target: cleanTarget, instruction: instruction.trim(), counts: {}, patternSteps: cleanSteps, patternRepeats: cleanRepeats, progress: 0 };
+      const round = { id: newId(), name: cleanName, target: cleanTarget, instruction: instruction.trim(), counts: {}, patternSteps: cleanSteps, patternRepeats: cleanRepeats, progress: 0, started: false };
       commit({ rounds: [...state.rounds, round], activeId: round.id });
     }
     setEditingRound(null);
@@ -637,32 +654,32 @@ function Home() {
                       </div>
                       <button
                         type="button"
-                        onClick={() => changeCount(1)}
+                        onClick={advanceRound}
                         disabled={isRoundComplete}
                         data-testid="button-count-stitch"
-                        aria-label={`Mark ${nextStepProgressLabel} as complete. Current count ${activeCount}`}
+                        aria-label={isRoundStarted ? `Mark ${nextStepProgressLabel} as complete. Current count ${activeCount}` : `Start ${activeRound.name}`}
                         className="counter-touch group relative flex aspect-square w-[min(56vw,220px)] max-w-[380px] items-center justify-center rounded-full border-[9px] border-[hsl(var(--primary)/.18)] bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] shadow-[0_14px_0_hsl(var(--accent)),0_22px_30px_rgba(102,57,45,.18)] transition-all duration-150 hover:brightness-[1.03] active:translate-y-2 active:shadow-[0_7px_0_hsl(var(--accent)),0_12px_18px_rgba(102,57,45,.15)] sm:w-[min(58vw,380px)] sm:border-[11px] sm:shadow-[0_20px_0_hsl(var(--accent)),0_28px_38px_rgba(102,57,45,.18)] disabled:cursor-default disabled:brightness-90"
                       >
                         <span className="absolute inset-3 rounded-full border border-dashed border-[hsl(var(--primary-foreground)/.3)]" />
                         <span className="relative text-center">
-                          {!isRoundComplete && nextStepPosition && nextStepPosition.total > 1 && <span data-testid="text-current-step-repeat" className="mb-2 block font-display text-2xl leading-none sm:text-3xl">{nextStepPosition.current} / {nextStepPosition.total}</span>}
-                          <span data-testid="text-current-marker-short" className="block text-[13px] font-bold uppercase tracking-[.2em] opacity-75">{nextMarker.short}</span>
-                          <span data-testid="text-current-marker-label" className="mt-2 block max-w-[175px] break-words [overflow-wrap:anywhere] font-display text-3xl leading-[.92] sm:mt-3 sm:max-w-[225px] sm:text-5xl">{nextStepLabel}</span>
-                          <span className="mt-3 block text-[10px] font-bold uppercase tracking-[.14em] opacity-75 sm:mt-5 sm:text-xs sm:tracking-[.16em]">{isRoundComplete ? 'ready for the next round' : 'next pattern step'}</span>
+                          {!isRoundComplete && isRoundStarted && nextStepPosition && nextStepPosition.total > 1 && <span data-testid="text-current-step-repeat" className="mb-2 block font-display text-2xl leading-none sm:text-3xl">{nextStepPosition.current} / {nextStepPosition.total}</span>}
+                          <span data-testid="text-current-marker-short" className="block text-[13px] font-bold uppercase tracking-[.2em] opacity-75">{isRoundStarted ? nextMarker.short : 'READY'}</span>
+                          <span data-testid="text-current-marker-label" className="mt-2 block max-w-[175px] break-words [overflow-wrap:anywhere] font-display text-3xl leading-[.92] sm:mt-3 sm:max-w-[225px] sm:text-5xl">{isRoundStarted ? nextStepLabel : 'Start'}</span>
+                          <span className="mt-3 block text-[10px] font-bold uppercase tracking-[.14em] opacity-75 sm:mt-5 sm:text-xs sm:tracking-[.16em]">{isRoundComplete ? 'ready for the next round' : isRoundStarted ? 'next pattern step' : 'tap to begin this round'}</span>
                         </span>
                       </button>
                       <div className="mt-5 flex flex-wrap items-center justify-center gap-3 sm:mt-9">
                         <AppButton onClick={() => changeCount(-1)} disabled={activeRound.patternSteps.length ? activeRound.progress === 0 : activeMarkerCount === 0} data-testid="button-decrement-stitch" aria-label="Go back one pattern step" className="h-12 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 text-sm font-bold text-[hsl(var(--foreground))] enabled:hover:border-[hsl(var(--primary))] disabled:opacity-35"><Undo2 size={17} /> Back</AppButton>
                         <p className="min-w-[150px] text-center text-xs text-[hsl(var(--muted-foreground))]"><strong className="block text-sm text-[hsl(var(--foreground))]">{activeCount} of {activeTotal}</strong> pattern steps</p>
-                        <AppButton onClick={() => changeCount(1)} disabled={isRoundComplete} data-testid="button-increment-stitch" aria-label="Add one pattern step" className="h-12 w-12 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--primary))] enabled:hover:border-[hsl(var(--primary))] disabled:opacity-35"><Plus size={19} /></AppButton>
+                        <AppButton onClick={advanceRound} disabled={isRoundComplete} data-testid="button-increment-stitch" aria-label={isRoundStarted ? 'Add one pattern step' : 'Start this round'} className="h-12 w-12 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--primary))] enabled:hover:border-[hsl(var(--primary))] disabled:opacity-35"><Plus size={19} /></AppButton>
                       </div>
                       {isRoundComplete ? (
                         <AppButton onClick={() => setCompletionRoundId(activeRound.id)} data-testid="button-continue-next-round" className="mt-5 h-11 bg-[hsl(var(--primary))] px-4 text-sm font-bold text-[hsl(var(--primary-foreground))] shadow-[0_3px_0_hsl(var(--accent))]">Continue to next round <ChevronRight size={17} /></AppButton>
                       ) : (
                         <div className="mt-4 w-full max-w-[380px] rounded-xl bg-[hsl(var(--secondary)/.16)] px-3 py-2 text-center sm:mt-5 sm:px-4 sm:py-3">
                           <p className="text-[10px] font-bold uppercase tracking-[.14em] text-[hsl(var(--muted-foreground))]">Do next</p>
-                          <p data-testid="text-counter-next-step" className="mt-1 break-words [overflow-wrap:anywhere] text-sm font-bold leading-snug">{nextStepProgressLabel}</p>
-                          <p className="mt-1 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">Tap only after you finish this full instruction.</p>
+                          <p data-testid="text-counter-next-step" className="mt-1 break-words [overflow-wrap:anywhere] text-sm font-bold leading-snug">{isRoundStarted ? nextStepProgressLabel : 'Tap Start to reveal your first pattern step.'}</p>
+                          <p className="mt-1 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">{isRoundStarted ? 'Tap only after you finish this full instruction.' : 'Starting does not count as a stitch.'}</p>
                         </div>
                       )}
                     </div>
@@ -682,8 +699,8 @@ function Home() {
                       <div className="mt-5 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--background)/.45)] p-4">
                         <p className="text-[11px] font-bold uppercase tracking-[.14em] text-[hsl(var(--muted-foreground))]">Your place</p>
                         <p data-testid="text-last-completed-step" className="mt-2 text-sm leading-relaxed"><span className="font-bold">Last completed:</span> {lastStepLabel || 'Nothing yet'}</p>
-                        <p data-testid="text-next-step" className="mt-1 text-sm leading-relaxed"><span className="font-bold">Do next:</span> {isRoundComplete ? 'Start the next round when you are ready.' : nextStepProgressLabel}</p>
-                        {patternPosition && <p data-testid="text-pattern-position" className="mt-2 text-xs font-bold text-[hsl(var(--primary))]">Repeat {patternPosition.repeat} of {activeRound.patternRepeats} · Step {patternPosition.step} of {patternPosition.stepsInRepeat}</p>}
+                        <p data-testid="text-next-step" className="mt-1 text-sm leading-relaxed"><span className="font-bold">Do next:</span> {isRoundComplete ? 'Start the next round when you are ready.' : isRoundStarted ? nextStepProgressLabel : 'Tap Start to reveal the first pattern step.'}</p>
+                        {isRoundStarted && patternPosition && <p data-testid="text-pattern-position" className="mt-2 text-xs font-bold text-[hsl(var(--primary))]">Repeat {patternPosition.repeat} of {activeRound.patternRepeats} · Step {patternPosition.step} of {patternPosition.stepsInRepeat}</p>}
                         <p className="mt-2 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">This stopping point is saved automatically on this device.</p>
                       </div>
                       <div className="mt-8 rounded-2xl bg-[hsl(var(--muted)/.6)] p-4">
