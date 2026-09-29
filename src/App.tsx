@@ -180,17 +180,27 @@ function currentPatternMarker(round: CrochetRound, offset = 0): MarkerId | null 
   return currentPatternStep(round, offset)?.markerId ?? null;
 }
 
-function currentPatternStep(round: CrochetRound, offset = 0): PatternStep | null {
+function currentPatternStepPosition(round: CrochetRound, offset = 0) {
   const patternLength = patternLengthFor(round);
   if (!patternLength) return null;
   let position = (round.progress + offset) % patternLength;
   if (position < 0) position += patternLength;
   for (const step of round.patternSteps) {
-    const repeat = Math.max(1, step.repeat);
-    if (position < repeat) return step;
-    position -= repeat;
+    const total = Math.max(1, step.repeat);
+    if (position < total) return { step, current: position + 1, total };
+    position -= total;
   }
-  return round.patternSteps[0] ?? null;
+  return null;
+}
+
+function currentPatternStep(round: CrochetRound, offset = 0): PatternStep | null {
+  return currentPatternStepPosition(round, offset)?.step ?? null;
+}
+
+function stepProgressLabel(position: ReturnType<typeof currentPatternStepPosition>) {
+  if (!position) return '';
+  const label = stepLabelFor(position.step);
+  return position.total > 1 ? `${label} · ${position.current} / ${position.total}` : label;
 }
 
 function patternPositionFor(round: CrochetRound) {
@@ -341,11 +351,13 @@ function Home() {
   const activeTotal = activeRound ? totalFor(activeRound) : 0;
   const activePercent = activeRound ? percentFor(activeRound) : 0;
   const isRoundComplete = activeRound ? activeCount >= activeTotal : false;
-  const nextStep = activeRound ? currentPatternStep(activeRound) : null;
+  const nextStepPosition = activeRound ? currentPatternStepPosition(activeRound) : null;
+  const nextStep = nextStepPosition?.step ?? null;
   const nextMarker = markerFor(nextStep?.markerId ?? selectedMarker);
   const nextStepLabel = isRoundComplete ? 'Round complete' : stepLabelFor(nextStep) || nextMarker.label;
-  const lastStep = activeRound && activeCount > 0 ? currentPatternStep(activeRound, -1) : null;
-  const lastStepLabel = stepLabelFor(lastStep);
+  const nextStepProgressLabel = isRoundComplete ? 'Round complete' : stepProgressLabel(nextStepPosition) || nextMarker.label;
+  const lastStepPosition = activeRound && activeCount > 0 ? currentPatternStepPosition(activeRound, -1) : null;
+  const lastStepLabel = stepProgressLabel(lastStepPosition);
   const patternPosition = activeRound ? patternPositionFor(activeRound) : null;
   const activeMarkerCount = activeRound?.counts[nextMarker.id] ?? 0;
   const completedRounds = state.rounds.filter((round) => countFor(round) >= totalFor(round)).length;
@@ -628,11 +640,12 @@ function Home() {
                         onClick={() => changeCount(1)}
                         disabled={isRoundComplete}
                         data-testid="button-count-stitch"
-                        aria-label={`Mark ${nextStepLabel} as complete. Current count ${activeCount}`}
+                        aria-label={`Mark ${nextStepProgressLabel} as complete. Current count ${activeCount}`}
                         className="counter-touch group relative flex aspect-square w-[min(56vw,220px)] max-w-[380px] items-center justify-center rounded-full border-[9px] border-[hsl(var(--primary)/.18)] bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] shadow-[0_14px_0_hsl(var(--accent)),0_22px_30px_rgba(102,57,45,.18)] transition-all duration-150 hover:brightness-[1.03] active:translate-y-2 active:shadow-[0_7px_0_hsl(var(--accent)),0_12px_18px_rgba(102,57,45,.15)] sm:w-[min(58vw,380px)] sm:border-[11px] sm:shadow-[0_20px_0_hsl(var(--accent)),0_28px_38px_rgba(102,57,45,.18)] disabled:cursor-default disabled:brightness-90"
                       >
                         <span className="absolute inset-3 rounded-full border border-dashed border-[hsl(var(--primary-foreground)/.3)]" />
                         <span className="relative text-center">
+                          {!isRoundComplete && nextStepPosition && nextStepPosition.total > 1 && <span data-testid="text-current-step-repeat" className="mb-2 block font-display text-2xl leading-none sm:text-3xl">{nextStepPosition.current} / {nextStepPosition.total}</span>}
                           <span data-testid="text-current-marker-short" className="block text-[13px] font-bold uppercase tracking-[.2em] opacity-75">{nextMarker.short}</span>
                           <span data-testid="text-current-marker-label" className="mt-2 block max-w-[175px] break-words [overflow-wrap:anywhere] font-display text-3xl leading-[.92] sm:mt-3 sm:max-w-[225px] sm:text-5xl">{nextStepLabel}</span>
                           <span className="mt-3 block text-[10px] font-bold uppercase tracking-[.14em] opacity-75 sm:mt-5 sm:text-xs sm:tracking-[.16em]">{isRoundComplete ? 'ready for the next round' : 'next pattern step'}</span>
@@ -648,7 +661,7 @@ function Home() {
                       ) : (
                         <div className="mt-4 w-full max-w-[380px] rounded-xl bg-[hsl(var(--secondary)/.16)] px-3 py-2 text-center sm:mt-5 sm:px-4 sm:py-3">
                           <p className="text-[10px] font-bold uppercase tracking-[.14em] text-[hsl(var(--muted-foreground))]">Do next</p>
-                          <p data-testid="text-counter-next-step" className="mt-1 break-words [overflow-wrap:anywhere] text-sm font-bold leading-snug">{nextStepLabel}</p>
+                          <p data-testid="text-counter-next-step" className="mt-1 break-words [overflow-wrap:anywhere] text-sm font-bold leading-snug">{nextStepProgressLabel}</p>
                           <p className="mt-1 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">Tap only after you finish this full instruction.</p>
                         </div>
                       )}
@@ -669,7 +682,7 @@ function Home() {
                       <div className="mt-5 rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--background)/.45)] p-4">
                         <p className="text-[11px] font-bold uppercase tracking-[.14em] text-[hsl(var(--muted-foreground))]">Your place</p>
                         <p data-testid="text-last-completed-step" className="mt-2 text-sm leading-relaxed"><span className="font-bold">Last completed:</span> {lastStepLabel || 'Nothing yet'}</p>
-                        <p data-testid="text-next-step" className="mt-1 text-sm leading-relaxed"><span className="font-bold">Do next:</span> {isRoundComplete ? 'Start the next round when you are ready.' : nextStepLabel}</p>
+                        <p data-testid="text-next-step" className="mt-1 text-sm leading-relaxed"><span className="font-bold">Do next:</span> {isRoundComplete ? 'Start the next round when you are ready.' : nextStepProgressLabel}</p>
                         {patternPosition && <p data-testid="text-pattern-position" className="mt-2 text-xs font-bold text-[hsl(var(--primary))]">Repeat {patternPosition.repeat} of {activeRound.patternRepeats} · Step {patternPosition.step} of {patternPosition.stepsInRepeat}</p>}
                         <p className="mt-2 text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">This stopping point is saved automatically on this device.</p>
                       </div>
