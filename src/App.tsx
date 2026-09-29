@@ -135,54 +135,6 @@ const markerOptions: { id: MarkerId; label: string; short: string }[] = [
   { id: 'mr', label: 'Magic ring', short: 'MR' },
 ];
 
-const demoState: TrackerState = {
-  activeId: 'round-2',
-  rounds: [
-    {
-      id: 'round-1',
-      name: 'Round 1',
-      target: 17,
-      instruction: 'Magic ring, chain 6, join with a slip stitch, chain 1, single crochet in each stitch, join, then chain 2.',
-      counts: {},
-      patternSteps: [
-        { markerId: 'mr', repeat: 1 },
-        { markerId: 'ch', repeat: 6, label: 'Chain 6' },
-        { markerId: 'slst', repeat: 1, label: 'Slip stitch in first chain' },
-        { markerId: 'ch', repeat: 1, label: 'Chain 1' },
-        { markerId: 'sc', repeat: 6, label: 'Single crochet in each stitch' },
-        { markerId: 'slst', repeat: 1, label: 'Slip stitch to join' },
-        { markerId: 'ch', repeat: 2, label: 'Chain 2' },
-      ],
-      patternRepeats: 1,
-      progress: 0,
-    },
-    {
-      id: 'round-2',
-      name: 'Round 2',
-      target: 3,
-      instruction: 'Single crochet in the first stitch, single crochet increase in the next stitch, then skip the next stitch.',
-      counts: {},
-      patternSteps: [
-        { markerId: 'sc', repeat: 1, label: 'Single crochet in first stitch' },
-        { markerId: 'sc-inc', repeat: 1, label: 'Single crochet increase in next stitch' },
-        { markerId: 'skip', repeat: 1, label: 'Skip next stitch' },
-      ],
-      patternRepeats: 1,
-      progress: 0,
-    },
-    {
-      id: 'round-3',
-      name: 'Round 3',
-      target: 36,
-      instruction: 'Single crochet around',
-      counts: {},
-      patternSteps: [{ markerId: 'sc', repeat: 1 }],
-      patternRepeats: 36,
-      progress: 0,
-    },
-  ],
-};
-
 const storageKey = 'crochet-counter-notebook-v1';
 const newId = () => `round-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -264,21 +216,24 @@ function percentFor(round: CrochetRound) {
 }
 
 function emptyState(): TrackerState {
-  return {
-    activeId: null,
-    rounds: [
-      {
-        id: newId(),
-        name: 'Round 1',
-        target: 12,
-        instruction: '',
-        counts: {},
-        patternSteps: [],
-        patternRepeats: 1,
-        progress: 0,
-      },
-    ],
+  const firstRound: CrochetRound = {
+    id: newId(),
+    name: 'Round 1',
+    target: 12,
+    instruction: '',
+    counts: {},
+    patternSteps: [],
+    patternRepeats: 1,
+    progress: 0,
   };
+  return {
+    activeId: firstRound.id,
+    rounds: [firstRound],
+  };
+}
+
+function isLegacyDemoNotebook(state: TrackerState, projectName?: string) {
+  return projectName === 'Meadowlight cardigan' && state.rounds.some((round) => round.id === 'round-2');
 }
 
 function AppButton({
@@ -327,10 +282,10 @@ function Modal({
 }
 
 function Home() {
-  const [state, setState] = useState<TrackerState>(demoState);
+  const [state, setState] = useState<TrackerState>(emptyState);
   const [selectedMarker, setSelectedMarker] = useState<MarkerId>('sc');
-  const [projectName, setProjectName] = useState('Meadowlight cardigan');
-  const [patternNotes, setPatternNotes] = useState('A soft, easy rhythm for slow afternoons.');
+  const [projectName, setProjectName] = useState('My crochet project');
+  const [patternNotes, setPatternNotes] = useState('');
   const [past, setPast] = useState<TrackerState[]>([]);
   const [future, setFuture] = useState<TrackerState[]>([]);
   const [hydrated, setHydrated] = useState(false);
@@ -339,6 +294,7 @@ function Home() {
   const [showMarkerList, setShowMarkerList] = useState(false);
   const [completionRoundId, setCompletionRoundId] = useState<string | null>(null);
   const [showFreshNotebookDialog, setShowFreshNotebookDialog] = useState(false);
+  const [showUsageGuide, setShowUsageGuide] = useState(false);
   const [roundAction, setRoundAction] = useState<'reset' | 'delete' | null>(null);
   const [keepScreenAwake, setKeepScreenAwake] = useState(false);
   const wakeLockRef = useRef<ScreenWakeLock | null>(null);
@@ -352,7 +308,7 @@ function Home() {
       const saved = window.localStorage.getItem(storageKey);
       if (saved) {
         const parsed = JSON.parse(saved) as { state?: TrackerState; projectName?: string; patternNotes?: string };
-        if (parsed.state?.rounds) {
+        if (parsed.state?.rounds && !isLegacyDemoNotebook(parsed.state, parsed.projectName)) {
           const rounds = parsed.state.rounds.map((round) => normalizeRound({
             ...round,
             patternSteps: round.patternSteps ?? [],
@@ -361,8 +317,10 @@ function Home() {
           }));
           setState({ ...parsed.state, rounds });
         }
-        if (typeof parsed.projectName === 'string') setProjectName(parsed.projectName);
-        if (typeof parsed.patternNotes === 'string') setPatternNotes(parsed.patternNotes);
+        if (!isLegacyDemoNotebook(parsed.state ?? { rounds: [], activeId: null }, parsed.projectName)) {
+          if (typeof parsed.projectName === 'string') setProjectName(parsed.projectName);
+          if (typeof parsed.patternNotes === 'string') setPatternNotes(parsed.patternNotes);
+        }
       }
     } catch {
       // A malformed notebook should never prevent the counter from opening.
@@ -391,7 +349,7 @@ function Home() {
   const patternPosition = activeRound ? patternPositionFor(activeRound) : null;
   const activeMarkerCount = activeRound?.counts[nextMarker.id] ?? 0;
   const completedRounds = state.rounds.filter((round) => countFor(round) >= totalFor(round)).length;
-  const isDemo = projectName === 'Meadowlight cardigan' && state.rounds.some((round) => round.id === 'round-2');
+  const isNewNotebook = state.rounds.length === 1 && !activeRound?.instruction && !activeRound?.patternSteps.length && activeCount === 0;
 
   const commit = (next: TrackerState) => {
     setPast((items) => [...items.slice(-39), state]);
@@ -610,6 +568,7 @@ function Home() {
               <h1 className="mt-1 font-display text-[32px] leading-tight">Made one loop at a time.</h1>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              <AppButton onClick={() => setShowUsageGuide(true)} data-testid="button-usage-guide" aria-label="How to use Crochet Counter" className="h-11 w-11 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] hover:border-[hsl(var(--primary))] hover:text-[hsl(var(--primary))]"><Info size={18} /></AppButton>
               {typeof navigator !== 'undefined' && Boolean((navigator as WakeLockNavigator).wakeLock) && <AppButton onClick={toggleKeepScreenAwake} data-testid="button-keep-screen-awake" aria-pressed={keepScreenAwake} aria-label={keepScreenAwake ? 'Allow screen to sleep' : 'Keep screen awake'} className={`hidden h-11 rounded-full border px-3 text-xs font-bold sm:inline-flex ${keepScreenAwake ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary)/.1)] text-[hsl(var(--primary))]' : 'border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))]'}`}><Sun size={17} /> Awake</AppButton>}
               <AppButton onClick={undo} disabled={!past.length} data-testid="button-undo" aria-label="Undo last action" className="h-11 w-11 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] enabled:hover:border-[hsl(var(--primary))] enabled:hover:text-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-35"><Undo2 size={18} /></AppButton>
               <AppButton onClick={redo} disabled={!future.length} data-testid="button-redo" aria-label="Redo last action" className="h-11 w-11 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] enabled:hover:border-[hsl(var(--primary))] enabled:hover:text-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-35"><Redo2 size={18} /></AppButton>
@@ -618,10 +577,10 @@ function Home() {
           </header>
 
           <div className="px-3 pb-8 sm:px-8 sm:pb-10 lg:px-12 lg:pb-14">
-            {isDemo && (
+            {isNewNotebook && (
               <div className="rise-in mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[hsl(var(--accent)/.55)] bg-[hsl(var(--accent)/.17)] px-4 py-3 text-sm text-[hsl(var(--foreground))]">
-                <span><strong className="font-bold">A little demo to start.</strong> Everything here is yours to edit.</span>
-                <AppButton onClick={() => setShowFreshNotebookDialog(true)} data-testid="button-dismiss-demo" className="h-9 rounded-lg px-3 text-xs font-bold text-[hsl(var(--primary))] hover:bg-[hsl(var(--card)/.65)]">Start fresh</AppButton>
+                <span><strong className="font-bold">Start with Round 1.</strong> Add your stitch sequence, then tap the large stitch button as you work.</span>
+                <AppButton onClick={() => setShowUsageGuide(true)} data-testid="button-open-usage-guide" className="h-9 rounded-lg px-3 text-xs font-bold text-[hsl(var(--primary))] hover:bg-[hsl(var(--card)/.65)]">How to use</AppButton>
               </div>
             )}
 
@@ -794,6 +753,7 @@ function Home() {
       {modal === 'round' && <RoundModal round={editingRound} onClose={() => { setModal(null); setEditingRound(null); }} onSave={saveRound} />}
       {completionRoundId && <RoundCompleteModal rounds={state.rounds} completedRoundId={completionRoundId} onClose={() => setCompletionRoundId(null)} onStartNext={startNextRound} />}
       {showFreshNotebookDialog && <FreshNotebookModal onClose={() => setShowFreshNotebookDialog(false)} onConfirm={startFresh} />}
+      {showUsageGuide && <UsageGuideModal onClose={() => setShowUsageGuide(false)} />}
       {roundAction && activeRound && <RoundActionModal action={roundAction} roundName={activeRound.name} onClose={() => setRoundAction(null)} onConfirm={roundAction === 'reset' ? resetRound : removeRound} />}
     </div>
   );
@@ -832,6 +792,21 @@ function FreshNotebookModal({ onClose, onConfirm }: { onClose: () => void; onCon
         <AppButton onClick={onClose} data-testid="button-cancel-start-fresh" className="h-12 border border-[hsl(var(--border))] px-4 font-bold text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]">Keep current notebook</AppButton>
         <AppButton onClick={onConfirm} data-testid="button-confirm-start-fresh" className="h-12 bg-[hsl(var(--primary))] px-4 font-bold text-[hsl(var(--primary-foreground))] shadow-[0_4px_0_hsl(var(--accent))]">Start fresh</AppButton>
       </div>
+    </Modal>
+  );
+}
+
+function UsageGuideModal({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal title="How to use" eyebrow="Crochet Counter" onClose={onClose}>
+      <ol className="space-y-4 text-sm leading-relaxed text-[hsl(var(--muted-foreground))]">
+        <li><strong className="text-[hsl(var(--foreground))]">1. Set up Round 1.</strong> Use the pencil to add the round name, your exact pattern instructions, and the stitch sequence.</li>
+        <li><strong className="text-[hsl(var(--foreground))]">2. Add each full action.</strong> Include details such as “single crochet increase,” “BLO single crochet,” or “skip next stitch,” so the main button always says exactly what comes next.</li>
+        <li><strong className="text-[hsl(var(--foreground))]">3. Tap after you finish.</strong> The large stitch button advances one pattern step. The previous and next labels help you confirm your place.</li>
+        <li><strong className="text-[hsl(var(--foreground))]">4. Correct mistakes easily.</strong> Use Back or Undo for the last action, and Reset only when you want to begin the entire round again.</li>
+        <li><strong className="text-[hsl(var(--foreground))]">5. Continue round by round.</strong> When a round is complete, confirm whether you are ready to start the next one. Your progress saves automatically in this browser.</li>
+      </ol>
+      <AppButton onClick={onClose} data-testid="button-close-usage-guide" className="mt-6 h-12 w-full bg-[hsl(var(--primary))] px-4 font-bold text-[hsl(var(--primary-foreground))] shadow-[0_4px_0_hsl(var(--accent))]">Got it</AppButton>
     </Modal>
   );
 }
